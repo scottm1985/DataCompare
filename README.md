@@ -46,6 +46,11 @@ In XrmToolBox open the **Tool Library**, search for **Data Compare** and install
      entity is mapped to another table, and `Prefixes: contoso_, new_` when a prefix filter is set.
    - The **Status** list and the **Filter rows...** box narrow the grid (the text is searched in every
      visible cell, not case-sensitive); `X of Y rows` says how many are shown. Click a column header to sort.
+   - The **Differing column** list shows only the rows where one column differs - for instance `Status
+     (statecode) · 12`: the 12 rows whose status is not the same in both environments. It lists every column
+     that differs in at least one row (by display name, with its row count), is filled again when the compare
+     options change, and works together with the Status list and the text box. Missing and Extra rows have no
+     column comparison, so they are not shown while a column is chosen; `(any column)` shows every row again.
    - **Select a row** to see all its columns below the grid: the primary key first, then every column by
      display name, the primary's value next to the secondary's. A compared column that differs is **amber**;
      a column that is not compared is **grey** - the key, the ignored columns, columns outside the prefix
@@ -54,6 +59,9 @@ In XrmToolBox open the **Tool Library**, search for **Data Compare** and install
      and the reason). For a mapped entity a column read from a differently named secondary column shows both
      names (`Account Number → new_accountnumber`, `accountid → new_accountid` for the key). Tick
      **Differences only** to see just the columns whose values differ.
+   - **Search columns** (under the header) shows only the columns whose logical or display name contains the text
+     (not case-sensitive, together with Differences only); it is kept when you select another row, `X of Y columns`
+     says how many are shown and Escape clears it.
    - The header above the columns names the record and its status, and says when the record was found by id
      outside one of the views (for instance a different status in the secondary: the view filtered it out).
 6. The log can be copied, saved or cleared. Errors also go to XrmToolBox's own log.

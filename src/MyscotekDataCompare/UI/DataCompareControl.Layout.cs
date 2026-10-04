@@ -44,9 +44,20 @@ namespace MyscotekDataCompare.UI
         /// </summary>
         internal const int ProgressMinWidth = 160;
 
+        /// <summary>
+        /// The row filter's text box keeps the rest of the filter row's line while it gets at least this width; below it
+        /// the text box and the row count take a line of their own under the two combos.
+        /// </summary>
+        internal const int FilterBoxMinWidth = 160;
+
+        /// <summary>The differing-column filter's width (its list opens as wide as its longest item).</summary>
+        private const int DifferingFilterWidth = 220;
+
         /// <summary>The results grid is never squeezed below this; a tool too small for it scrolls the results area.</summary>
         internal const int MinimumGridHeight = 90;
-        internal const int DetailPanelMinHeight = 90;
+
+        /// <summary>The detail pane's caption row, its column search row and a few lines of its grid.</summary>
+        internal const int DetailPanelMinHeight = 120;
         internal const int LogPanelMinHeight = 90;
 
         // ---- toolbar ----
@@ -100,8 +111,11 @@ namespace MyscotekDataCompare.UI
         private Label _matchingCountLabel;
         private Label _uncheckedCountLabel;
         private Label _secondaryFailedLabel;
-        private TableLayoutPanel _filterRow;
+        private FlowLayoutPanel _filterRow;
+        private Label _statusFilterLabel;
         private ComboBox _statusFilter;
+        private Label _differingFilterLabel;
+        private ComboBox _differingFilter;
         private TextBox _rowFilter;
         private Label _rowCountLabel;
         private DataGridView _grid;
@@ -110,6 +124,9 @@ namespace MyscotekDataCompare.UI
         // ---- detail pane and log (right, bottom) ----
         private Label _detailCaption;
         private CheckBox _differencesOnly;
+        private TableLayoutPanel _detailFilterRow;
+        private TextBox _detailFilter;
+        private Label _detailCountLabel;
         private DataGridView _detailGrid;
         private RichTextBox _log;
         private Button _copyLogButton;
@@ -189,6 +206,7 @@ namespace MyscotekDataCompare.UI
             }
             _resultsArea.ClientSizeChanged += (sender, e) => QueueFitLayout();
             _summaryRow.SizeChanged += (sender, e) => QueueFitLayout();   // the strip wrapped onto more (or fewer) lines
+            _rowCountLabel.SizeChanged += (sender, e) => QueueFitLayout();   // "X of Y rows" grew: the text box gives way
             _mainSplit.SplitterMoved += OnMainSplitterMoved;
 
             ResumeLayout(false);
@@ -304,7 +322,7 @@ namespace MyscotekDataCompare.UI
             _resultsPanel = NewTable(new Padding(2, 4, 6, 2),
                 SizeType.AutoSize,   // compare, cancel, compare options, entity mappings, progress
                 SizeType.AutoSize,   // summary strip (wraps on a narrow tool)
-                SizeType.AutoSize,   // status filter, text filter, row count
+                SizeType.AutoSize,   // status filter, differing-column filter, text filter, row count (wraps)
                 SizeType.Percent);   // results grid
             _resultsPanel.Name = "resultsPanel";
 
@@ -373,9 +391,11 @@ namespace MyscotekDataCompare.UI
                 _uncheckedCountLabel, _secondaryFailedLabel
             });
 
-            // -- filter row: status, text, and at its right how many rows the filters show --
-            var statusLabel = NewLabel("statusFilterLabel", "Status:");
-            statusLabel.Margin = new Padding(3, 7, 0, 2);
+            // -- filter row: status, differing column, text, and how many rows the filters show; a wrapping flow
+            //    whose text box FitFilterRow sizes to the rest of its line (on a narrow tool the two combos keep the
+            //    first line and the text box and the count take the next) --
+            _statusFilterLabel = NewLabel("statusFilterLabel", "Status:");
+            _statusFilterLabel.Margin = new Padding(3, 7, 0, 2);
             _statusFilter = new ComboBox
             {
                 Name = "statusFilter",
@@ -387,35 +407,33 @@ namespace MyscotekDataCompare.UI
             _statusFilter.SelectedIndex = 0;
             _statusFilter.SelectedIndexChanged += OnStatusFilterChanged;
             _toolTip.SetToolTip(_statusFilter, "Show only the rows of one status.");
-            _rowFilter = new TextBox { Name = "rowFilter", Dock = DockStyle.Fill, Margin = new Padding(3, 3, 3, 3) };
+            _differingFilterLabel = NewLabel("differingColumnLabel", "Differing column:");
+            _differingFilterLabel.Margin = new Padding(9, 7, 0, 2);
+            _differingFilter = new ComboBox
+            {
+                Name = "differingColumnFilter",
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                Width = DifferingFilterWidth,
+                MaxDropDownItems = 20,
+                Margin = new Padding(3, 3, 3, 3)
+            };
+            _differingFilter.Items.Add(AnyColumn);
+            _differingFilter.SelectedIndex = 0;
+            _differingFilter.SelectedIndexChanged += OnDifferingFilterChanged;
+            _toolTip.SetToolTip(_differingFilter,
+                "Show only the rows where this column differs (with how many rows that is). Missing and Extra rows have no " +
+                "column comparison, so they never show while a column is chosen.");
+            _rowFilter = new TextBox { Name = "rowFilter", Width = 200, Margin = new Padding(3, 3, 3, 3) };
             SetCueBanner(_rowFilter, "Filter rows...");
             _rowFilter.TextChanged += OnRowFilterTextChanged;
             _toolTip.SetToolTip(_rowFilter, "Shows only the rows with this text in one of their visible cells (not case-sensitive).");
             _rowCountLabel = NewLabel("rowCountLabel", "0 of 0 rows");
             _rowCountLabel.Margin = new Padding(6, 7, 3, 2);   // level with the filter's text
 
-            _filterRow = new TableLayoutPanel
-            {
-                Name = "filterRow",
-                Dock = DockStyle.Fill,
-                AutoSize = true,
-                AutoSizeMode = AutoSizeMode.GrowAndShrink,
-                ColumnCount = 4,
-                RowCount = 1,
-                Margin = Padding.Empty,
-                Padding = Padding.Empty
-            };
-            _filterRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-            _filterRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-            _filterRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
-            _filterRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-            _filterRow.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            _filterRow.Controls.Add(statusLabel, 0, 0);
-            _filterRow.Controls.Add(_statusFilter, 1, 0);
-            _filterRow.Controls.Add(_rowFilter, 2, 0);
-            _filterRow.Controls.Add(_rowCountLabel, 3, 0);
+            _filterRow = NewRow("filterRow");
+            _filterRow.Controls.AddRange(new Control[] { _statusFilterLabel, _statusFilter, _differingFilterLabel, _differingFilter, _rowFilter, _rowCountLabel });
 
-            // -- results grid: bound to a DataTable through a BindingSource whose Filter is the status and
+            // -- results grid: bound to a DataTable through a BindingSource whose Filter is the status, differing-column and
             //    text filter; the rows are coloured by status in CellFormatting (rows stay shared) --
             _bindingSource = new BindingSource(_components);
             _grid = new DataGridView
@@ -450,7 +468,7 @@ namespace MyscotekDataCompare.UI
 
         private Control BuildDetailPanel()
         {
-            TableLayoutPanel panel = NewTable(new Padding(2, 2, 6, 2), SizeType.AutoSize, SizeType.Percent);
+            TableLayoutPanel panel = NewTable(new Padding(2, 2, 6, 2), SizeType.AutoSize, SizeType.AutoSize, SizeType.Percent);
             panel.Name = "detailPanel";
 
             // -- header: the selected row (status, id) and Differences only at its right --
@@ -486,6 +504,36 @@ namespace MyscotekDataCompare.UI
             header.Controls.Add(_detailCaption, 0, 0);
             header.Controls.Add(_differencesOnly, 1, 0);
 
+            // -- column search: a row of its own under the caption (beside it, the row's id and status would be
+            //    cut short on an 800 px tool), with how many of the row's columns the filters show at its right --
+            _detailFilter = new TextBox { Name = "detailFilterBox", Dock = DockStyle.Fill, Margin = new Padding(3, 1, 3, 3) };
+            SetCueBanner(_detailFilter, "Search columns (name or display name)");
+            _detailFilter.TextChanged += OnDetailFilterChanged;
+            _detailFilter.PreviewKeyDown += OnDetailFilterPreviewKeyDown;
+            _detailFilter.KeyDown += OnDetailFilterKeyDown;
+            _toolTip.SetToolTip(_detailFilter,
+                "Shows only the columns with this text in their logical name or display name (not case-sensitive). " +
+                "Kept when another row is selected; Escape clears it.");
+            _detailCountLabel = NewLabel("detailCountLabel", "0 of 0 columns");
+            _detailCountLabel.Margin = new Padding(6, 5, 3, 2);   // level with the search box's text
+
+            _detailFilterRow = new TableLayoutPanel
+            {
+                Name = "detailFilterRow",
+                Dock = DockStyle.Fill,
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                ColumnCount = 2,
+                RowCount = 1,
+                Margin = Padding.Empty,
+                Padding = Padding.Empty
+            };
+            _detailFilterRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+            _detailFilterRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            _detailFilterRow.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            _detailFilterRow.Controls.Add(_detailFilter, 0, 0);
+            _detailFilterRow.Controls.Add(_detailCountLabel, 1, 0);
+
             // -- the selected row's columns: Column / Primary / Secondary --
             _detailGrid = new DataGridView
             {
@@ -511,7 +559,8 @@ namespace MyscotekDataCompare.UI
             _detailGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "detailSecondary", HeaderText = "Secondary", FillWeight = 35, SortMode = DataGridViewColumnSortMode.NotSortable });
 
             panel.Controls.Add(header, 0, 0);
-            panel.Controls.Add(_detailGrid, 0, 1);
+            panel.Controls.Add(_detailFilterRow, 0, 1);
+            panel.Controls.Add(_detailGrid, 0, 2);
             return panel;
         }
 
@@ -623,6 +672,7 @@ namespace MyscotekDataCompare.UI
                 int width = _resultsArea.ClientSize.Width;
                 if (width <= 0) return;
                 FitActionRow(width - _resultsPanel.Padding.Horizontal - _actionRow.Margin.Horizontal);
+                FitFilterRow(width - _resultsPanel.Padding.Horizontal - _filterRow.Margin.Horizontal);
                 int needed = ResultsHeightNeeded(width);
                 if (_resultsArea.AutoScrollMinSize.Height != needed) _resultsArea.AutoScrollMinSize = new Size(0, needed);
                 FitRightSplit(needed);
@@ -649,6 +699,30 @@ namespace MyscotekDataCompare.UI
             int target = Math.Max(1, rest >= ProgressMinWidth ? rest : rowWidth - _progressLabel.Margin.Horizontal);
             if (_progressLabel.Width != target) _progressLabel.Width = target;
         }
+
+        /// <summary>
+        /// Lays the filter row out at <paramref name="rowWidth"/>: everything on one line while the text box gets at
+        /// least <see cref="FilterBoxMinWidth"/> there (it takes the rest of the line); else the status and the
+        /// differing-column filters on the first line (each on its own on a tool too narrow for both) and the text
+        /// box, as wide as the line allows, with the row count on the next. Flow breaks keep each label with its combo.
+        /// </summary>
+        private void FitFilterRow(int rowWidth)
+        {
+            if (rowWidth <= 0) return;
+            int status = Outer(_statusFilterLabel) + Outer(_statusFilter);
+            int differing = Outer(_differingFilterLabel) + Outer(_differingFilter);
+            int count = Outer(_rowCountLabel);
+            int boxMargin = _rowFilter.Margin.Horizontal;
+            bool oneLine = status + differing + FilterBoxMinWidth + boxMargin + count <= rowWidth;
+            bool combosApart = !oneLine && status + differing > rowWidth;
+            if (_filterRow.GetFlowBreak(_statusFilter) != combosApart) _filterRow.SetFlowBreak(_statusFilter, combosApart);
+            if (_filterRow.GetFlowBreak(_differingFilter) != !oneLine) _filterRow.SetFlowBreak(_differingFilter, !oneLine);
+            int target = Math.Max(1, (oneLine ? rowWidth - status - differing : rowWidth) - count - boxMargin);
+            if (_rowFilter.Width != target) _rowFilter.Width = target;
+        }
+
+        /// <summary>A control's width with its margins (the room it takes on a flow's line).</summary>
+        private static int Outer(Control control) => control.Width + control.Margin.Horizontal;
 
         /// <summary>
         /// The height the results area needs at <paramref name="areaWidth"/>: each row at its preferred height

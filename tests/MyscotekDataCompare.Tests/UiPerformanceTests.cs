@@ -17,8 +17,8 @@ namespace MyscotekDataCompare.Tests
 {
     /// <summary>
     /// A result of 20 000 rows (six view columns, all four statuses) through the real control: building its
-    /// table, binding it, painting, both filters, selecting a row and re-evaluating with other ignored
-    /// attributes each stay well under a few seconds, and the grid's rows stay shared (the colours come from
+    /// table, binding it, painting, the status, text and differing-column filters, selecting a row and
+    /// re-evaluating with other ignored attributes each stay well under a few seconds, and the grid's rows stay shared (the colours come from
     /// CellFormatting, never from per-row styles). The times are written to the test output.
     /// </summary>
     [Collection(UiTestCollection.Name)]
@@ -28,6 +28,9 @@ namespace MyscotekDataCompare.Tests
 
         /// <summary>Generous: the measured times are a fraction of this on a developer machine; a CI agent may be slow.</summary>
         private static readonly TimeSpan Bound = TimeSpan.FromSeconds(5);
+
+        /// <summary>Choosing a differing column filters at once (measured about 0.1 s): a tighter bound for its steps.</summary>
+        private static readonly TimeSpan DifferingFilterBound = TimeSpan.FromSeconds(2);
 
         private readonly ITestOutputHelper _output;
 
@@ -92,6 +95,34 @@ namespace MyscotekDataCompare.Tests
                     });
                     Assert.Equal(RowCount, grid.Rows.Count);
 
+                    // The differing-column filter: filled from the 20 000 rows when the result was shown.
+                    ComboBox differing = UiTestHost.Find<ComboBox>(control, "differingColumnFilter");
+                    Assert.Equal(new[] { DataCompareControl.AnyColumn, "Account Number (accountnumber)" + DataCompareControl.CountSeparator + (RowCount / 4) },
+                        UiFlowTests.Items(differing));
+                    Measure(times, "differing-column filter (accountnumber)", () =>
+                    {
+                        UiFlowTests.ChooseDiffering(differing, "accountnumber");
+                        grid.Refresh();
+                        return 0;
+                    });
+                    Assert.Equal(RowCount / 4, grid.Rows.Count);
+                    Assert.Equal("5000 of 20000 rows", UiTestHost.Find<Label>(control, "rowCountLabel").Text);
+                    Measure(times, "differing-column filter with the status filter (Missing)", () =>
+                    {
+                        UiTestHost.Find<ComboBox>(control, "statusFilter").SelectedItem = "Missing";
+                        grid.Refresh();
+                        return 0;
+                    });
+                    Assert.Equal(0, grid.Rows.Count);
+                    UiTestHost.Find<ComboBox>(control, "statusFilter").SelectedItem = "All";
+                    Measure(times, "differing-column filter back to (any column)", () =>
+                    {
+                        differing.SelectedIndex = 0;
+                        grid.Refresh();
+                        return 0;
+                    });
+                    Assert.Equal(RowCount, grid.Rows.Count);
+
                     Measure(times, "select a row deep down (detail pane)", () =>
                     {
                         UiFlowTests.Select(grid, 15001);   // Different
@@ -109,6 +140,12 @@ namespace MyscotekDataCompare.Tests
                     // Every Matching row differs in its (no longer ignored) modifiedon: they all turn Different.
                     Assert.Equal(0, control.Result.Summary.Matching);
                     Assert.Equal(RowCount / 2, control.Result.Summary.Different);
+                    // ... and the differing-column filter lists modifiedon too.
+                    Assert.Equal(new[]
+                    {
+                        DataCompareControl.AnyColumn, "Account Number (accountnumber)" + DataCompareControl.CountSeparator + (RowCount / 4),
+                        "Modified On (modifiedon)" + DataCompareControl.CountSeparator + (RowCount / 4)
+                    }, UiFlowTests.Items(differing));
 
                     // The rows the grid did not paint are still shared (index -1): no per-row state was created.
                     Assert.Equal(-1, grid.Rows.SharedRow(10000).Index);
@@ -117,6 +154,8 @@ namespace MyscotekDataCompare.Tests
 
             foreach ((string step, TimeSpan time) in times) _output.WriteLine($"{step}: {time.TotalMilliseconds:0} ms");
             Assert.All(times, t => Assert.True(t.Time < Bound, $"{t.Step} took {t.Time.TotalMilliseconds:0} ms"));
+            Assert.All(times.Where(t => t.Step.StartsWith("differing-column filter", StringComparison.Ordinal)),
+                t => Assert.True(t.Time < DifferingFilterBound, $"{t.Step} took {t.Time.TotalMilliseconds:0} ms"));
         }
 
         private static T Measure<T>(List<(string, TimeSpan)> times, string step, Func<T> action)

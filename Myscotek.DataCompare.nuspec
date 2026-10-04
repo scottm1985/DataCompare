@@ -31,7 +31,10 @@
       migrated into another table), with optional column pairs for columns that were renamed; the view is
       rewritten for the secondary table, and the records are still matched on their GUID. Compare options...
       replaces Ignored attributes... and adds a prefix filter: compare only the columns whose names start with
-      given prefixes (e.g. contoso_, new_).
+      given prefixes (e.g. contoso_, new_). The detail pane gets a column search: show only the columns whose
+      logical or display name contains the text, kept from row to row. The results grid gets a Differing
+      column filter: choose a column (listed with how many rows it differs in) to see only the records where it
+      differs, together with the status and text filters.
       1.2026.10.1 - first release.
     </releaseNotes>
     <copyright>Copyright (c) 2026 Myscotek</copyright>

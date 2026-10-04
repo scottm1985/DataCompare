@@ -188,6 +188,295 @@ namespace MyscotekDataCompare.Tests
         }
 
         [Fact]
+        public void The_column_search_filters_the_detail_pane_by_logical_or_display_name_and_is_kept_across_rows()
+        {
+            var scenario = new UiScenario();
+            UiTestHost.Run(() =>
+            {
+                using (DataCompareControl control = UiTest.NewControl(scenario.Settings, scenario.Save, scenario.Dialogs))
+                {
+                    ConnectAndCompare(control, scenario);
+                    DataGridView grid = UiTestHost.Find<DataGridView>(control, "resultsGrid");
+                    DataGridView detail = UiTestHost.Find<DataGridView>(control, "detailGrid");
+                    TextBox search = UiTestHost.Find<TextBox>(control, "detailFilterBox");
+                    Label count = UiTestHost.Find<Label>(control, "detailCountLabel");
+                    CheckBox differencesOnly = UiTestHost.Find<CheckBox>(control, "differencesOnlyCheckBox");
+                    int saves = scenario.SaveCount;
+
+                    Select(grid, 1);   // Fabrikam: the account number differs
+                    List<string> all = DetailNames(detail);
+                    Assert.Equal(new[] { "accountid", "Account Name", "Account Number" }, all.Take(3));
+                    Assert.Contains("Primary Contact", all);   // display name; logical name primarycontactid
+                    Assert.Equal($"{all.Count} of {all.Count} columns", count.Text);
+
+                    // A part of the logical name only (the display name reads "Account Number").
+                    search.Text = "accountnum";
+                    Assert.Equal(new[] { "Account Number" }, DetailNames(detail));
+                    Assert.Equal($"1 of {all.Count} columns", count.Text);
+                    // A part of the display name only (the logical name is primarycontactid).
+                    search.Text = "Primary Cont";
+                    Assert.Equal(new[] { "Primary Contact" }, DetailNames(detail));
+                    // Case-insensitive, on either name; the primary key obeys the filter like any other line.
+                    search.Text = "ACCOUNT N";
+                    Assert.Equal(new[] { "Account Name", "Account Number" }, DetailNames(detail));
+                    search.Text = "Id";
+                    Assert.Equal(new[] { "accountid", "ownerid", "Primary Contact" }, DetailNames(detail));
+                    search.Text = "name";
+                    Assert.Equal(new[] { "Account Name" }, DetailNames(detail));
+                    search.Text = "no such column";
+                    Assert.Empty(DetailNames(detail));
+                    Assert.Equal($"0 of {all.Count} columns", count.Text);
+
+                    // With Differences only: both must pass.
+                    differencesOnly.Checked = true;
+                    search.Text = "account";
+                    Assert.Equal(new[] { "Account Number" }, DetailNames(detail));
+                    Assert.Equal($"1 of {all.Count} columns", count.Text);
+                    search.Text = "name";
+                    Assert.Empty(DetailNames(detail));
+                    differencesOnly.Checked = false;
+                    Assert.Equal(new[] { "Account Name" }, DetailNames(detail));
+
+                    // Kept when another row is selected, so one column can be followed from row to row.
+                    search.Text = "owner";
+                    Select(grid, 3);   // O'Neil's Bakery: only the (ignored) owner differs
+                    Assert.Equal("owner", search.Text);
+                    Assert.Equal(new[] { "ownerid" }, DetailNames(detail));
+                    Select(grid, 0);
+                    Assert.Equal(new[] { "ownerid" }, DetailNames(detail));
+                    grid.ClearSelection();   // no row: an empty pane, the search stays
+                    Assert.Empty(DetailNames(detail));
+                    Assert.Equal("0 of 0 columns", count.Text);
+                    Assert.Equal("owner", search.Text);
+                    Select(grid, 1);
+                    Assert.Equal(new[] { "ownerid" }, DetailNames(detail));
+
+                    // Escape clears it (taken as the box's own key, not passed on): every column again.
+                    var preview = new PreviewKeyDownEventArgs(Keys.Escape);
+                    RaiseKey(search, "OnPreviewKeyDown", preview);
+                    Assert.True(preview.IsInputKey);
+                    var escape = new KeyEventArgs(Keys.Escape);
+                    RaiseKey(search, "OnKeyDown", escape);
+                    Assert.True(escape.SuppressKeyPress);
+                    Assert.Equal(string.Empty, search.Text);
+                    Assert.Equal(all, DetailNames(detail));
+                    Assert.Equal($"{all.Count} of {all.Count} columns", count.Text);
+                    preview = new PreviewKeyDownEventArgs(Keys.Escape);   // nothing to clear: Escape goes on as usual
+                    RaiseKey(search, "OnPreviewKeyDown", preview);
+                    Assert.False(preview.IsInputKey);
+
+                    // Blank (white space too) is no filter; the search is never saved.
+                    search.Text = "   ";
+                    Assert.Equal(all, DetailNames(detail));
+                    Assert.Equal(saves + 2, scenario.SaveCount);   // just the two Differences only changes
+                    Assert.Empty(scenario.Dialogs.Messages);
+                }
+            });
+        }
+
+        [Fact]
+        public void The_column_search_matches_a_part_of_either_name_ignoring_case_and_blank_matches_all()
+        {
+            var line = new ColumnComparison { LogicalName = "new_description", DisplayName = "Notes" };
+            Assert.True(DataCompareControl.MatchesColumnSearch(line, "DESCRIPTION"));
+            Assert.True(DataCompareControl.MatchesColumnSearch(line, " note "));   // trimmed
+            Assert.False(DataCompareControl.MatchesColumnSearch(line, "summary"));
+            Assert.True(DataCompareControl.MatchesColumnSearch(line, null));
+            Assert.True(DataCompareControl.MatchesColumnSearch(line, " "));
+            Assert.True(DataCompareControl.MatchesColumnSearch(new ColumnComparison { LogicalName = "x_description" }, "Descr"));   // no display name
+            Assert.False(DataCompareControl.MatchesColumnSearch(new ColumnComparison(), "a"));
+        }
+
+        [Fact]
+        public void The_differing_column_filter_lists_the_columns_that_differ_and_shows_only_the_rows_where_one_does()
+        {
+            var scenario = new UiScenario();
+            UiTestHost.Run(() =>
+            {
+                using (DataCompareControl control = UiTest.NewControl(scenario.Settings, scenario.Save, scenario.Dialogs))
+                {
+                    ComboBox differing = UiTestHost.Find<ComboBox>(control, "differingColumnFilter");
+                    Assert.Equal(ComboBoxStyle.DropDownList, differing.DropDownStyle);
+                    Assert.Equal("Differing column:", UiTestHost.Find<Label>(control, "differingColumnLabel").Text);
+                    Assert.Equal(new[] { DataCompareControl.AnyColumn }, Items(differing));   // no result: nothing to choose
+                    Assert.Equal(0, differing.SelectedIndex);
+
+                    ConnectAndCompare(control, scenario);
+                    DataGridView grid = UiTestHost.Find<DataGridView>(control, "resultsGrid");
+                    Label rowCount = UiTestHost.Find<Label>(control, "rowCountLabel");
+                    ComboBox status = UiTestHost.Find<ComboBox>(control, "statusFilter");
+                    TextBox filter = UiTestHost.Find<TextBox>(control, "rowFilter");
+                    string dot = DataCompareControl.CountSeparator;
+
+                    // Every attribute that differs in some row, by display name ("Display (logical)", the logical name
+                    // alone without a label), with its row count; "(any column)" first and selected.
+                    Assert.Equal(new[] { "(any column)", "Account Number (accountnumber)" + dot + "1", "statecode" + dot + "1", "statuscode" + dot + "1" },
+                        Items(differing));
+                    Assert.Equal(DataCompareControl.AnyColumn, differing.SelectedItem);
+                    Assert.Null(control.SelectedDifferingColumn);
+                    Assert.Equal(6, grid.Rows.Count);
+
+                    // A column: only the rows where it differs.
+                    ChooseDiffering(differing, "statecode");
+                    Assert.Equal("statecode", control.SelectedDifferingColumn);
+                    Assert.Equal(new[] { "Tailspin [UK] 50%" }, Column(grid, 2));
+                    Assert.Equal("1 of 6 rows", rowCount.Text);
+                    // Missing (Northwind) and Extra (Litware) rows have no column comparison: they drop out too.
+                    ChooseDiffering(differing, "accountnumber");
+                    Assert.Equal(new[] { "Fabrikam" }, Column(grid, 2));
+                    Assert.Equal(new[] { "Different" }, Column(grid, 0));
+
+                    // Combined with the status filter and the text filter: a row must pass all three.
+                    status.SelectedItem = "Different";
+                    Assert.Equal(new[] { "Fabrikam" }, Column(grid, 2));
+                    status.SelectedItem = "Missing";
+                    Assert.Empty(grid.Rows.Cast<DataGridViewRow>());
+                    Assert.Equal("0 of 6 rows", rowCount.Text);
+                    status.SelectedItem = "All";
+                    SetFilter(control, filter, "fab");
+                    Assert.Equal(new[] { "Fabrikam" }, Column(grid, 2));
+                    SetFilter(control, filter, "tail");
+                    Assert.Empty(grid.Rows.Cast<DataGridViewRow>());
+                    ChooseDiffering(differing, "statuscode");
+                    Assert.Equal(new[] { "Tailspin [UK] 50%" }, Column(grid, 2));
+                    SetFilter(control, filter, "accountnumber");   // the hidden differing names are not a visible cell
+                    Assert.Empty(grid.Rows.Cast<DataGridViewRow>());
+                    SetFilter(control, filter, string.Empty);
+
+                    // The detail pane's column search is left alone when the filter changes.
+                    TextBox search = UiTestHost.Find<TextBox>(control, "detailFilterBox");
+                    search.Text = "state";
+                    Select(grid, 0);
+                    Assert.Equal(new[] { "statecode" }, DetailNames(UiTestHost.Find<DataGridView>(control, "detailGrid")));
+                    ChooseDiffering(differing, "accountnumber");
+                    Select(grid, 0);
+                    Assert.Equal("state", search.Text);
+
+                    // (any column) shows every row again.
+                    differing.SelectedIndex = 0;
+                    Assert.Null(control.SelectedDifferingColumn);
+                    Assert.Equal(6, grid.Rows.Count);
+                    Assert.Equal("6 of 6 rows", rowCount.Text);
+                    Assert.Empty(scenario.Dialogs.Messages);
+                }
+            });
+        }
+
+        [Fact]
+        public void The_differing_column_filter_follows_re_evaluation_and_is_cleared_by_a_new_compare_or_another_view()
+        {
+            var scenario = new UiScenario();
+            using (var secondaryViewRequested = new ManualResetEventSlim())
+            using (var release = new ManualResetEventSlim(initialState: true))
+            {
+                UiTestHost.Run(() =>
+                {
+                    using (DataCompareControl control = UiTest.NewControl(scenario.Settings, scenario.Save, scenario.Dialogs))
+                    {
+                        ConnectAndCompare(control, scenario);
+                        DataGridView grid = UiTestHost.Find<DataGridView>(control, "resultsGrid");
+                        Label rowCount = UiTestHost.Find<Label>(control, "rowCountLabel");
+                        ComboBox differing = UiTestHost.Find<ComboBox>(control, "differingColumnFilter");
+                        string dot = DataCompareControl.CountSeparator;
+                        ChooseDiffering(differing, "statecode");
+                        Assert.Equal(new[] { "Tailspin [UK] 50%" }, Column(grid, 2));
+
+                        // 1. Ignore statecode (only): it no longer differs anywhere, so it leaves the list and the filter
+                        //    falls back to (any column); the owner is no longer ignored and joins it.
+                        control.ShowCompareOptionsDialog = form => DriveDialog(form, box => box.Text = "statecode", "okButton");
+                        UiTestHost.Find<Button>(control, "compareOptionsButton").PerformClick();
+                        Assert.Equal(new[] { "(any column)", "Account Number (accountnumber)" + dot + "1", "ownerid" + dot + "1", "statuscode" + dot + "1" },
+                            Items(differing));
+                        Assert.Equal(DataCompareControl.AnyColumn, differing.SelectedItem);
+                        Assert.Equal(6, grid.Rows.Count);
+                        Assert.Equal("6 of 6 rows", rowCount.Text);
+
+                        // 2. A column that still differs after re-evaluation stays selected, and its rows are filtered again.
+                        ChooseDiffering(differing, "ownerid");
+                        Assert.Equal(new[] { "O'Neil's Bakery" }, Column(grid, 2));
+                        control.ShowCompareOptionsDialog = form => DriveDialog(form, box => box.Text = "createdon", "okButton");
+                        UiTestHost.Find<Button>(control, "compareOptionsButton").PerformClick();
+                        Assert.Equal("ownerid", control.SelectedDifferingColumn);
+                        Assert.Equal(new[] { "O'Neil's Bakery" }, Column(grid, 2));
+                        Assert.Equal("1 of 6 rows", rowCount.Text);
+                        Assert.Equal(new[] { "(any column)", "Account Number (accountnumber)" + dot + "1", "ownerid" + dot + "1", "statecode" + dot + "1", "statuscode" + dot + "1" },
+                            Items(differing));
+
+                        // 3. Restoring the defaults ignores the owner again: its row turns Matching and leaves the filter.
+                        control.ShowCompareOptionsDialog = form => DriveDialog(form,
+                            box => UiTestHost.Find<Button>(box.FindForm(), "restoreDefaultsButton").PerformClick(), "okButton");
+                        UiTestHost.Find<Button>(control, "compareOptionsButton").PerformClick();
+                        Assert.Null(control.SelectedDifferingColumn);
+                        Assert.Equal(6, grid.Rows.Count);
+                        Assert.Equal(new[] { "(any column)", "Account Number (accountnumber)" + dot + "1", "statecode" + dot + "1", "statuscode" + dot + "1" },
+                            Items(differing));
+
+                        // 4. A new Compare clears the list while it runs; afterwards it is filled again, nothing chosen.
+                        ChooseDiffering(differing, "statecode");
+                        release.Reset();
+                        scenario.Secondary.BeforeExecute = request =>
+                        {
+                            if (!(request is RetrieveMultipleRequest multiple) || !(multiple.Query is FetchExpression)) return;
+                            secondaryViewRequested.Set();
+                            release.Wait(TimeSpan.FromSeconds(20));
+                        };
+                        UiTestHost.Find<Button>(control, "compareButton").PerformClick();
+                        UiTestHost.PumpUntil(() => secondaryViewRequested.IsSet, "the secondary view to be requested");
+                        Assert.Equal(new[] { DataCompareControl.AnyColumn }, Items(differing));
+                        Assert.Equal(0, differing.SelectedIndex);
+                        Assert.Empty(grid.Rows.Cast<DataGridViewRow>());
+                        release.Set();
+                        UiTestHost.PumpUntil(() => !control.IsBusy && control.Result != null, "the second comparison");
+                        Assert.Equal(4, differing.Items.Count);
+                        Assert.Null(control.SelectedDifferingColumn);
+                        Assert.Equal(6, grid.Rows.Count);
+
+                        // 5. Another view clears the result and the list.
+                        ChooseDiffering(differing, "statuscode");
+                        UiTestHost.Find<ListBox>(control, "viewList").SelectedIndex = 1;
+                        Assert.Null(control.Result);
+                        Assert.Equal(new[] { DataCompareControl.AnyColumn }, Items(differing));
+                        Assert.Null(control.SelectedDifferingColumn);
+                        Assert.Empty(scenario.Dialogs.Messages);
+                    }
+                });
+            }
+        }
+
+        [Fact]
+        public void The_differing_column_choices_are_the_union_of_the_rows_with_counts_sorted_by_display_name()
+        {
+            Core.Schema.EntitySchema schema = TestData.StandardSchema().GetEntity("account");
+            Entity record = TestData.Account(TestData.Id(1), "A");
+            var rows = new List<RowComparison>
+            {
+                new RowComparison(TestData.Id(1), RowStatus.Different, record, record, new[] { "revenue", "statecode" }, true, true),
+                new RowComparison(TestData.Id(2), RowStatus.Different, record, record, new[] { "new_bignumber", "revenue" }, true, true),
+                new RowComparison(TestData.Id(3), RowStatus.Match, record, record, null, true, true),
+                new RowComparison(TestData.Id(4), RowStatus.Missing, record, null, null, true, false),
+                new RowComparison(TestData.Id(5), RowStatus.Different, record, record, new[] { "accountnumber", "revenue" }, true, true)
+            };
+            var result = new CompareResult(schema, new CompareOptions(), rows, new CompareSummary());
+
+            List<DataCompareControl.DifferingColumnChoice> choices = DataCompareControl.DifferingColumnChoices(result);
+
+            string dot = DataCompareControl.CountSeparator;
+            Assert.Equal(new[] { "Account Number (accountnumber)" + dot + "1", "Annual Revenue (revenue)" + dot + "3", "new_bignumber" + dot + "1", "Status (statecode)" + dot + "1" },
+                choices.Select(c => c.ToString()));
+            Assert.Equal(new[] { "accountnumber", "revenue", "new_bignumber", "statecode" }, choices.Select(c => c.LogicalName));
+            Assert.Equal(new[] { 1, 3, 1, 1 }, choices.Select(c => c.Count));
+            Assert.Empty(DataCompareControl.DifferingColumnChoices(null));
+            Assert.Equal(((char)0x00B7).ToString(), dot.Trim());
+
+            // The hidden cell and the row filter it is matched with: whole names only, so "revenue" never matches
+            // "revenue_base".
+            Assert.Equal("|revenue|statecode|", DataCompareControl.DifferingText(rows[0]));
+            Assert.Equal(string.Empty, DataCompareControl.DifferingText(rows[2]));
+            Assert.Equal("[__differing] LIKE '%|revenue|%'", DataCompareControl.DifferingColumnFilter("revenue"));
+            Assert.Null(DataCompareControl.DifferingColumnFilter(null));
+        }
+
+        [Fact]
         public void Editing_the_ignored_attributes_re_evaluates_the_result_without_reading_again()
         {
             var scenario = new UiScenario();
@@ -721,6 +1010,22 @@ namespace MyscotekDataCompare.Tests
             }
             return colours;
         }
+
+        /// <summary>The texts of a combo box's items, in order.</summary>
+        internal static List<string> Items(ComboBox combo) => combo.Items.Cast<object>().Select(i => i.ToString()).ToList();
+
+        /// <summary>Chooses the differing-column filter's item of an attribute (as the user would in the list).</summary>
+        internal static void ChooseDiffering(ComboBox differing, string logicalName) =>
+            differing.SelectedItem = differing.Items.OfType<DataCompareControl.DifferingColumnChoice>().Single(c => c.LogicalName == logicalName);
+
+        /// <summary>The Column cells of the detail pane's lines, in order.</summary>
+        private static List<string> DetailNames(DataGridView detail) =>
+            detail.Rows.Cast<DataGridViewRow>().Select(l => (string)l.Cells[0].Value).ToList();
+
+        /// <summary>Raises a key event on a control as its key message would (OnPreviewKeyDown / OnKeyDown).</summary>
+        private static void RaiseKey<T>(Control control, string method, T args) where T : EventArgs =>
+            typeof(Control).GetMethod(method, BindingFlags.Instance | BindingFlags.NonPublic, null, new[] { typeof(T) }, null)
+                .Invoke(control, new object[] { args });
 
         private static void SetFilter(DataCompareControl control, TextBox filter, string text)
         {

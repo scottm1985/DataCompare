@@ -14,6 +14,7 @@ namespace MyscotekDataCompare.Tests
     /// the summary strip is visible), is sized like a small and a large XrmToolBox tab: every container fills
     /// its space, the rows stack without gaps or overlaps, the grids and the log take what is left, and no
     /// button is clipped (the summary strip wraps; only a tool smaller than any real tab scrolls the results).
+    /// The detail pane's column search row is checked at every size too.
     /// </summary>
     [Collection(UiTestCollection.Name)]
     public class UiLayoutTests
@@ -32,8 +33,12 @@ namespace MyscotekDataCompare.Tests
                     Assert.Contains("Secondary view failed", UiFlowTests.VisibleSummary(control));
                     SplitContainer main = UiTestHost.Find<SplitContainer>(control, "mainSplit");
 
+                    // 800 px: the summary strip (with "Secondary view failed") and the filter row (two combos, then the
+                    // text box) take two lines each; 500 px high, the results area scrolls by the filter row's second
+                    // line at most (800 x 600 does not scroll: the next test).
                     SizeTo(control, new Size(800, 500));
-                    AssertFills(control, scroll: false);
+                    AssertFills(control, scroll: true);
+                    AssertScrollsAtMostAFilterLine(control);
                     int narrowEntityWidth = main.SplitterDistance;
                     Assert.InRange(narrowEntityWidth, 200, 299);   // the entity list gives way on a small tool
 
@@ -41,9 +46,11 @@ namespace MyscotekDataCompare.Tests
                     AssertFills(control, scroll: false);
                     Assert.Equal(300, main.SplitterDistance);   // and gets its width back on a large one
                     Assert.Equal(1, SummaryLines(control));     // the whole summary strip on one line
+                    Assert.Equal(1, FilterLines(control));      // and the whole filter row
 
                     SizeTo(control, new Size(800, 500));
-                    AssertFills(control, scroll: false);
+                    AssertFills(control, scroll: true);
+                    AssertScrollsAtMostAFilterLine(control);
                     Assert.Equal(narrowEntityWidth, main.SplitterDistance);
 
                     // Smaller than any XrmToolBox tab: the rows still do not overlap and the grid keeps its
@@ -51,6 +58,17 @@ namespace MyscotekDataCompare.Tests
                     SizeTo(control, new Size(640, 400));
                     AssertFills(control, scroll: true);
                     Assert.Equal(200, main.SplitterDistance);
+
+                    // A column chosen in the differing-column filter changes nothing of the layout.
+                    ComboBox differing = UiTestHost.Find<ComboBox>(control, "differingColumnFilter");
+                    Assert.True(differing.Items.Count > 1, "no differing column listed");
+                    differing.SelectedIndex = differing.Items.Count - 1;
+                    AssertFills(control, scroll: true);
+                    SizeTo(control, new Size(1600, 900));
+                    AssertFills(control, scroll: false);
+                    Assert.Equal(1, FilterLines(control));
+                    differing.SelectedIndex = 0;
+                    SizeTo(control, new Size(640, 400));
 
                     // A width the user dragged the entity list to is kept whenever there is room for it.
                     SizeTo(control, new Size(1600, 900));
@@ -81,7 +99,8 @@ namespace MyscotekDataCompare.Tests
                     }
                     Assert.Contains("Not checked: 3 (cancelled)", UiFlowTests.VisibleSummary(control));
                     SizeTo(control, new Size(800, 500));
-                    AssertFills(control, scroll: false);
+                    AssertFills(control, scroll: true);
+                    AssertScrollsAtMostAFilterLine(control);
                     SizeTo(control, new Size(1600, 900));
                     AssertFills(control, scroll: false);
                     Assert.Empty(scenario.Dialogs.Messages);
@@ -109,12 +128,21 @@ namespace MyscotekDataCompare.Tests
                     Button mappings = UiTestHost.Find<Button>(control, "entityMappingsButton");
                     Label progress = UiTestHost.Find<Label>(control, "progressLabel");
                     Assert.False(string.IsNullOrEmpty(progress.Text));
+                    UiTestHost.Find<TextBox>(control, "detailFilterBox").Text = "account";   // a column search and its count are laid out too
+                    Assert.Equal("3 of 12 columns", UiTestHost.Find<Label>(control, "detailCountLabel").Text);
 
                     // 800 px: every button on the action row's first line; the progress text where it fits.
                     SizeTo(control, new Size(800, 600));
                     AssertFills(control, scroll: false);
                     Assert.Equal(compare.Top, mappings.Top);
                     Assert.True(progress.Width >= DataCompareControl.ProgressMinWidth, $"progress {progress.Width} px wide at 800x600");
+                    // The filter row wraps like the action row: both combos on its first line, the text box (as wide as
+                    // the line allows) and the row count on the second.
+                    Assert.Equal(2, FilterLines(control));
+                    Assert.Equal(LineTop(control, "statusFilter"), LineTop(control, "differingColumnFilter"));
+                    Assert.True(LineTop(control, "rowFilter") > LineTop(control, "differingColumnFilter"), "the text box should wrap at 800x600");
+                    TextBox rowFilter = UiTestHost.Find<TextBox>(control, "rowFilter");
+                    Assert.Equal(rowFilter.Margin.Left, rowFilter.Left);
 
                     // 1920 px: one line for the action row and one for the whole summary strip.
                     SizeTo(control, new Size(1920, 1080));
@@ -122,12 +150,18 @@ namespace MyscotekDataCompare.Tests
                     Assert.Equal((compare.Top, compare.Top), (mappings.Top, progress.Top));
                     Assert.Equal(mappings.Right + mappings.Margin.Right + progress.Margin.Left, progress.Left);
                     Assert.Equal(1, SummaryLines(control));
+                    // One line for the filter row: Status, Differing column, then the text box filling the rest.
+                    Assert.Equal(1, FilterLines(control));
+                    ComboBox differing = UiTestHost.Find<ComboBox>(control, "differingColumnFilter");
+                    Assert.Equal(differing.Right + differing.Margin.Right + rowFilter.Margin.Left, rowFilter.Left);
+                    Assert.True(rowFilter.Width >= DataCompareControl.FilterBoxMinWidth, $"row filter {rowFilter.Width} px wide at 1920x1080");
 
                     // And back.
                     SizeTo(control, new Size(800, 600));
                     AssertFills(control, scroll: false);
                     SizeTo(control, new Size(640, 400));   // smaller than any tab: the buttons may wrap, nothing is clipped
                     AssertFills(control, scroll: true);
+                    Assert.Equal(3, FilterLines(control));   // too narrow for both combos on one line: each label with its combo
                     Assert.Empty(scenario.Dialogs.Messages);
                 }
             });
@@ -226,7 +260,7 @@ namespace MyscotekDataCompare.Tests
             var rows = new Control[]
             {
                 UiTestHost.Find<FlowLayoutPanel>(control, "actionRow"), UiTestHost.Find<FlowLayoutPanel>(control, "summaryRow"),
-                UiTestHost.Find<TableLayoutPanel>(control, "filterRow"), grid
+                UiTestHost.Find<FlowLayoutPanel>(control, "filterRow"), grid
             };
             AssertStacked(results, rows, fullWidthFrom: 0, at);
             Assert.True(grid.Height >= DataCompareControl.MinimumGridHeight, $"grid {grid.Height} px high" + at);
@@ -235,18 +269,35 @@ namespace MyscotekDataCompare.Tests
             Assert.Equal(progress.Parent.ClientSize.Width - progress.Margin.Right, progress.Right);   // the progress text takes the rest of its line
             var rowFilter = UiTestHost.Find<TextBox>(control, "rowFilter");
             Assert.True(rowFilter.Width >= 100, $"row filter {rowFilter.Width} px wide" + at);
+            // The filter row: each label on the line of its combo, the text box on the line of the row count, which
+            // ends the line (the text box takes the rest of it).
+            Assert.Equal(LineTop(control, "statusFilterLabel"), LineTop(control, "statusFilter"));
+            Assert.Equal(LineTop(control, "differingColumnLabel"), LineTop(control, "differingColumnFilter"));
+            Assert.Equal(LineTop(control, "rowFilter"), LineTop(control, "rowCountLabel"));
+            var rowCount = UiTestHost.Find<Label>(control, "rowCountLabel");
+            Assert.Equal(rowCount.Parent.ClientSize.Width - rowCount.Margin.Right, rowCount.Right);
+            Assert.True(UiTestHost.Find<ComboBox>(control, "differingColumnFilter").Visible, "the differing-column filter is hidden" + at);
 
             // Right, bottom: the detail pane above the log, each filling its panel.
             var detailPanel = UiTestHost.Find<TableLayoutPanel>(control, "detailPanel");
             Assert.Equal(bottom.Panel1.ClientSize, detailPanel.Size);
             Assert.True(bottom.Panel1.Height >= DataCompareControl.DetailPanelMinHeight, $"detail panel {bottom.Panel1.Height} px high" + at);
             var detailHeader = UiTestHost.Find<TableLayoutPanel>(control, "detailHeader");
+            var detailFilterRow = UiTestHost.Find<TableLayoutPanel>(control, "detailFilterRow");
             DataGridView detail = UiTestHost.Find<DataGridView>(control, "detailGrid");
-            AssertStacked(detailPanel, new Control[] { detailHeader, detail }, fullWidthFrom: 0, at);
+            AssertStacked(detailPanel, new Control[] { detailHeader, detailFilterRow, detail }, fullWidthFrom: 0, at);
             AssertChildrenInside(detailHeader, at);
+            AssertChildrenInside(detailFilterRow, at);
             Assert.True(detail.Height >= 50, $"detail grid {detail.Height} px high" + at);
             var differencesOnly = UiTestHost.Find<CheckBox>(control, "differencesOnlyCheckBox");
             Assert.Equal(differencesOnly.Parent.ClientSize.Width - differencesOnly.Margin.Right, differencesOnly.Right);   // at the right of the caption
+            // The column search under the caption, its count at the right; the caption keeps its row's width.
+            var detailFilter = UiTestHost.Find<TextBox>(control, "detailFilterBox");
+            Assert.True(detailFilter.Width >= 100, $"column search {detailFilter.Width} px wide" + at);
+            Assert.Equal(detailFilterRow.Padding.Left + detailFilter.Margin.Left, detailFilter.Left);
+            var detailCount = UiTestHost.Find<Label>(control, "detailCountLabel");
+            Assert.Equal(detailCount.Parent.ClientSize.Width - detailCount.Margin.Right, detailCount.Right);
+            Assert.True(detailCount.Left >= detailFilter.Right, "the column count overlaps the search box" + at);
 
             var logPanel = UiTestHost.Find<TableLayoutPanel>(control, "logPanel");
             Assert.Equal(bottom.Panel2.ClientSize, logPanel.Size);
@@ -297,6 +348,27 @@ namespace MyscotekDataCompare.Tests
                 Assert.DoesNotContain(children, other => other != child && other.Bounds.IntersectsWith(child.Bounds));
             }
         }
+
+        /// <summary>The results area scrolls by no more than one line of the filter row (its text box line).</summary>
+        private static void AssertScrollsAtMostAFilterLine(DataCompareControl control)
+        {
+            var area = UiTestHost.Find<Panel>(control, "resultsArea");
+            TextBox rowFilter = UiTestHost.Find<TextBox>(control, "rowFilter");
+            int line = UiTestHost.Find<FlowLayoutPanel>(control, "filterRow").Height - (rowFilter.Top - rowFilter.Margin.Top);
+            int overflow = area.AutoScrollMinSize.Height - area.ClientSize.Height;
+            Assert.InRange(overflow, 1, line);
+        }
+
+        /// <summary>The top of the flow line a control of the filter row sits on.</summary>
+        private static int LineTop(DataCompareControl control, string name)
+        {
+            Control c = UiTestHost.Find<Control>(control, name);
+            return c.Top - c.Margin.Top;
+        }
+
+        /// <summary>The number of lines the filter row takes.</summary>
+        private static int FilterLines(DataCompareControl control) =>
+            UiTestHost.Find<FlowLayoutPanel>(control, "filterRow").Controls.Cast<Control>().Where(c => c.Visible).Select(c => c.Top - c.Margin.Top).Distinct().Count();
 
         /// <summary>The number of lines the visible labels of the summary strip take.</summary>
         private static int SummaryLines(DataCompareControl control) =>

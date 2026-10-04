@@ -64,6 +64,17 @@ namespace MyscotekDataCompare.UI
         internal const string StatusColumn = "__status";
         private const string ValueColumnPrefix = "c";
 
+        // A hidden column of the DataTable (never a grid column, never searched by the text filter): the row's
+        // DifferingAttributes as "|name1|name2|" ("" when none), so the differing-column filter is one LIKE.
+        internal const string DifferingColumn = "__differing";
+        private const char DifferingSeparator = '|';
+
+        /// <summary>The differing-column filter's first item: no filter.</summary>
+        internal const string AnyColumn = "(any column)";
+
+        /// <summary>Between a differing column's name and its row count in the filter: a middle dot.</summary>
+        internal static readonly string CountSeparator = " " + (char)0x00B7 + " ";
+
         // The status texts (grid, status filter, detail caption) and the status filter's "everything".
         internal const string MissingText = "Missing";
         internal const string DifferentText = "Different";
@@ -125,6 +136,7 @@ namespace MyscotekDataCompare.UI
         private Dictionary<Guid, RowComparison> _rowsById = new Dictionary<Guid, RowComparison>();
         private DataTable _table;
         private RowComparison _detailRow;
+        private IList<ColumnComparison> _detailLines = new List<ColumnComparison>();   // _detailRow's lines, before the filters
 
         // ---- the one long operation that may run at a time ----
         private CancellationTokenSource _operation;
@@ -419,7 +431,7 @@ namespace MyscotekDataCompare.UI
             if (_applyingSettings) return;
             _settings.DifferencesOnly = _differencesOnly.Checked;
             SaveSettings();
-            Guard("Showing the row's columns", () => ShowDetails(_detailRow));
+            Guard("Showing the row's columns", FillDetailGrid);
         }
 
         // =====================================================================================
@@ -1037,10 +1049,11 @@ namespace MyscotekDataCompare.UI
                 {
                     foreach (RowComparison row in result.Rows)
                     {
-                        var values = new object[2 + columns.Count];
+                        var values = new object[3 + columns.Count];
                         values[0] = row.Id;
                         values[1] = StatusText(row.Status);
-                        for (int i = 0; i < columns.Count; i++) values[2 + i] = result.CellText(row, columns[i].Name);
+                        values[2] = DifferingText(row);
+                        for (int i = 0; i < columns.Count; i++) values[3 + i] = result.CellText(row, columns[i].Name);
                         table.Rows.Add(values);
                         rowsById[row.Id] = row;
                     }
@@ -1053,14 +1066,26 @@ namespace MyscotekDataCompare.UI
             }
         }
 
-        /// <summary>An empty table for <paramref name="valueColumns"/> view columns: __id (Guid), __status, c0..cN (strings).</summary>
+        /// <summary>An empty table for <paramref name="valueColumns"/> view columns: __id (Guid), __status, __differing, c0..cN (strings).</summary>
         private static DataTable NewTable(int valueColumns)
         {
             var table = new DataTable("Rows") { Locale = CultureInfo.CurrentCulture };
             table.Columns.Add(IdColumn, typeof(Guid));
             table.Columns.Add(StatusColumn, typeof(string));
+            table.Columns.Add(DifferingColumn, typeof(string));
             for (int i = 0; i < valueColumns; i++) table.Columns.Add(ValueColumnName(i), typeof(string));
             return table;
+        }
+
+        /// <summary>The hidden __differing cell of a row: "|name1|name2|" for its differing attributes, "" when there are none.</summary>
+        internal static string DifferingText(RowComparison row)
+        {
+            IReadOnlyList<string> names = row?.DifferingAttributes;
+            if (names == null || names.Count == 0) return string.Empty;
+            var text = new StringBuilder();
+            text.Append(DifferingSeparator);
+            foreach (string name in names) text.Append(name).Append(DifferingSeparator);
+            return text.ToString();
         }
 
         private static string ValueColumnName(int index) => ValueColumnPrefix + index.ToString(CultureInfo.InvariantCulture);
@@ -1116,17 +1141,22 @@ namespace MyscotekDataCompare.UI
             _resultView = view;
             _resultColumns = shown.Columns;
             _rowsById = shown.RowsById;
+            FillDifferingColumnFilter();   // before binding: BindTable applies the filters
             BindTable(shown.Table, shown.Columns, shown.Headers);
             UpdateSummary();
         }
 
-        /// <summary>Forgets the result: an empty grid (no view columns), the summary strip's empty text, an empty detail pane.</summary>
+        /// <summary>
+        /// Forgets the result: an empty grid (no view columns), the summary strip's empty text, an empty detail pane,
+        /// only "(any column)" in the differing-column filter.
+        /// </summary>
         private void ClearResult()
         {
             _result = null;
             _resultView = null;
             _resultColumns = new List<ViewColumn>();
             _rowsById = new Dictionary<Guid, RowComparison>();
+            FillDifferingColumnFilter();
             BindTable(NewTable(0), _resultColumns, null);
             UpdateSummary();
         }
@@ -1261,19 +1291,30 @@ namespace MyscotekDataCompare.UI
 
         private void OnRowFilterTimerTick(object sender, EventArgs e) => Guard("Filtering rows", ApplyRowFilter);
 
-        /// <summary>Applies the status and text filters to the grid now (the text normally a moment after the last keystroke).</summary>
-        internal void ApplyRowFilter()
+        /// <summary>
+        /// Applies the status, differing-column and text filters to the grid now (the text normally a moment after
+        /// the last keystroke); a row is shown when it passes all three.
+        /// </summary>
+        internal void ApplyRowFilter() => ApplyRowFilter(force: false);
+
+        /// <param name="force">Set the filter again even when its text did not change (the filtered cells did: re-evaluation).</param>
+        private void ApplyRowFilter(bool force)
         {
             _rowFilterTimer.Stop();
             if (_table == null) return;
             string status = _statusFilter.SelectedItem as string;
             string filter = CombineFilters(
-                string.IsNullOrEmpty(status) || status == AllStatuses ? null : "[" + StatusColumn + "] = '" + EscapeLikeValue(status) + "'",
-                BuildRowFilter(_rowFilter.Text, _table.Columns.Cast<DataColumn>().Select(c => c.ColumnName).Where(n => n != IdColumn)));
-            if (!string.Equals(filter ?? string.Empty, _filterApplied, StringComparison.Ordinal))
+                CombineFilters(
+                    string.IsNullOrEmpty(status) || status == AllStatuses ? null : "[" + StatusColumn + "] = '" + EscapeLikeValue(status) + "'",
+                    DifferingColumnFilter(SelectedDifferingColumn)),
+                BuildRowFilter(_rowFilter.Text, _table.Columns.Cast<DataColumn>().Select(c => c.ColumnName)
+                    .Where(n => n != IdColumn && n != DifferingColumn)));
+            if (string.IsNullOrEmpty(filter) && _filterApplied.Length == 0) force = false;   // no filter before or after: nothing to redo
+            if (force || !string.Equals(filter ?? string.Empty, _filterApplied, StringComparison.Ordinal))
             {
                 try
                 {
+                    if (force && _filterApplied.Length > 0) _bindingSource.RemoveFilter();
                     _bindingSource.Filter = filter;
                     _filterApplied = filter ?? string.Empty;
                 }
@@ -1286,6 +1327,112 @@ namespace MyscotekDataCompare.UI
             }
             UpdateRowCountLabel();
             ShowSelectedDetails();
+        }
+
+        /// <summary>The row filter of the differing-column filter: rows whose __differing cell names the attribute; null for none.</summary>
+        internal static string DifferingColumnFilter(string logicalName) =>
+            string.IsNullOrEmpty(logicalName)
+                ? null
+                : "[" + DifferingColumn + "] LIKE '%" + DifferingSeparator + EscapeLikeValue(logicalName) + DifferingSeparator + "%'";
+
+        // ---- the differing-column filter (SPEC 6.9) ----
+
+        /// <summary>One item of the differing-column filter: an attribute that differs in at least one row, and in how many.</summary>
+        internal sealed class DifferingColumnChoice
+        {
+            public DifferingColumnChoice(string logicalName, string displayName, int count)
+            {
+                LogicalName = logicalName;
+                DisplayName = displayName;
+                Count = count;
+            }
+
+            public string LogicalName { get; }
+
+            /// <summary>The primary metadata's label; the logical name when there is none.</summary>
+            public string DisplayName { get; }
+
+            /// <summary>The rows where the attribute differs.</summary>
+            public int Count { get; }
+
+            /// <summary>"Display Name (logicalname) - N" with a middle dot for the dash ("logicalname - N" when the label is the logical name).</summary>
+            public override string ToString() =>
+                (string.IsNullOrWhiteSpace(DisplayName) || string.Equals(DisplayName.Trim(), LogicalName, StringComparison.Ordinal)
+                    ? LogicalName
+                    : DisplayName.Trim() + " (" + LogicalName + ")")
+                + CountSeparator + Number(Count);
+        }
+
+        /// <summary>
+        /// The union of the rows' <see cref="RowComparison.DifferingAttributes"/>, each with the number of rows where it
+        /// differs and its display name from the result's (primary) metadata, sorted by display name then logical name.
+        /// Empty without a result.
+        /// </summary>
+        internal static List<DifferingColumnChoice> DifferingColumnChoices(CompareResult result)
+        {
+            var counts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            if (result != null)
+            {
+                foreach (RowComparison row in result.Rows)
+                {
+                    foreach (string name in row.DifferingAttributes)
+                    {
+                        counts.TryGetValue(name, out int count);
+                        counts[name] = count + 1;
+                    }
+                }
+            }
+            return counts
+                .Select(pair =>
+                {
+                    string label = result.Schema.Attribute(pair.Key)?.DisplayName;
+                    return new DifferingColumnChoice(pair.Key, string.IsNullOrWhiteSpace(label) ? pair.Key : label, pair.Value);
+                })
+                .OrderBy(c => c.DisplayName, StringComparer.CurrentCultureIgnoreCase)
+                .ThenBy(c => c.LogicalName, StringComparer.Ordinal)
+                .ToList();
+        }
+
+        /// <summary>The attribute the differing-column filter keeps the rows of; null for "(any column)".</summary>
+        internal string SelectedDifferingColumn => (_differingFilter.SelectedItem as DifferingColumnChoice)?.LogicalName;
+
+        /// <summary>Set while the differing-column filter's items are replaced: its selection events apply nothing.</summary>
+        private bool _fillingDifferingFilter;
+
+        private void OnDifferingFilterChanged(object sender, EventArgs e)
+        {
+            if (!_fillingDifferingFilter) Guard("Filtering rows", ApplyRowFilter);
+        }
+
+        /// <summary>
+        /// Refills the differing-column filter from the result shown: "(any column)", then <see cref="DifferingColumnChoices"/>.
+        /// The attribute selected stays selected while it still differs somewhere, else "(any column)" is. Applies no
+        /// filter itself (the caller does).
+        /// </summary>
+        private void FillDifferingColumnFilter()
+        {
+            string selected = SelectedDifferingColumn;
+            List<DifferingColumnChoice> choices = DifferingColumnChoices(_result);
+            _fillingDifferingFilter = true;
+            _differingFilter.BeginUpdate();
+            try
+            {
+                _differingFilter.Items.Clear();
+                _differingFilter.Items.Add(AnyColumn);
+                _differingFilter.Items.AddRange(choices.Cast<object>().ToArray());
+                int index = selected == null ? -1 : choices.FindIndex(c => string.Equals(c.LogicalName, selected, StringComparison.OrdinalIgnoreCase));
+                _differingFilter.SelectedIndex = index + 1;   // not found: (any column)
+                // The list opens wide enough for the longest item; the box keeps its width.
+                int widest = _differingFilter.Items.Cast<object>()
+                    .Select(item => TextRenderer.MeasureText(item.ToString(), _differingFilter.Font).Width)
+                    .DefaultIfEmpty(0).Max() + SystemInformation.VerticalScrollBarWidth + 8;
+                _differingFilter.DropDownWidth = Math.Max(_differingFilter.Width, Math.Min(widest, 600));
+            }
+            finally
+            {
+                _differingFilter.EndUpdate();
+                _fillingDifferingFilter = false;
+            }
         }
 
         /// <summary>Two row filters AND-ed (either may be null); null when both are.</summary>
@@ -1368,28 +1515,72 @@ namespace MyscotekDataCompare.UI
 
         /// <summary>
         /// Fills the detail pane with a row's columns (SPEC 6.2): the primary key first, then by display name;
-        /// only the differing lines with Differences only. A compared line that differs is amber; a line that
-        /// is not compared (key, ignored, derived, not in the primary metadata) has grey text. Empty without a row.
+        /// only the differing lines with Differences only, only the lines matching the column search when it is
+        /// set. A compared line that differs is amber; a line that is not compared (key, ignored, derived, not in
+        /// the primary metadata) has grey text. Empty without a row.
         /// </summary>
         private void ShowDetails(RowComparison row)
         {
             _detailRow = row;
+            if (row == null || _result == null)
+            {
+                _detailCaption.Text = _result == null ? string.Empty : NoSelectionCaption;
+                _detailLines = new List<ColumnComparison>();
+            }
+            else
+            {
+                _detailCaption.Text = DetailCaption(_result, row);
+                _detailLines = _result.GetDetails(row);
+            }
+            FillDetailGrid();
+        }
+
+        /// <summary>
+        /// The column search (SPEC 6.2) changed: the same row's lines are filtered again (nothing recomputed). The
+        /// text stays when another row is selected, so one column can be followed from row to row.
+        /// </summary>
+        private void OnDetailFilterChanged(object sender, EventArgs e) => Guard("Searching the row's columns", FillDetailGrid);
+
+        /// <summary>Escape in the column search clears it (and is not passed on while there is text to clear).</summary>
+        private void OnDetailFilterPreviewKeyDown(object sender, PreviewKeyDownEventArgs e)
+        {
+            if (e.KeyCode == Keys.Escape && _detailFilter.TextLength > 0) e.IsInputKey = true;
+        }
+
+        private void OnDetailFilterKeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.KeyCode != Keys.Escape || _detailFilter.TextLength == 0) return;
+            _detailFilter.Clear();
+            e.Handled = true;
+            e.SuppressKeyPress = true;   // no beep
+        }
+
+        /// <summary>
+        /// The column search: true when <paramref name="search"/> (trimmed) is blank or a case-insensitive part of the
+        /// line's logical name or display name.
+        /// </summary>
+        internal static bool MatchesColumnSearch(ColumnComparison line, string search)
+        {
+            string value = (search ?? string.Empty).Trim();
+            if (value.Length == 0) return true;
+            return (line.LogicalName ?? string.Empty).IndexOf(value, StringComparison.OrdinalIgnoreCase) >= 0
+                   || (line.DisplayName ?? string.Empty).IndexOf(value, StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        /// <summary>Shows <see cref="_detailLines"/> through Differences only and the column search, and counts them.</summary>
+        private void FillDetailGrid()
+        {
             _detailGrid.SuspendLayout();
             try
             {
                 _detailGrid.Rows.Clear();
-                if (row == null || _result == null)
-                {
-                    _detailCaption.Text = _result == null ? string.Empty : NoSelectionCaption;
-                    return;
-                }
-
-                _detailCaption.Text = DetailCaption(_result, row);
                 bool differencesOnly = _differencesOnly.Checked;
+                string search = _detailFilter.Text;
                 var lines = new List<DataGridViewRow>();
-                foreach (ColumnComparison line in _result.GetDetails(row))
+                foreach (ColumnComparison line in _detailLines)
                 {
                     if (differencesOnly && !line.IsDifferent) continue;
+                    if (!MatchesColumnSearch(line, search)) continue;
                     var gridRow = new DataGridViewRow();
                     bool renamed = line.SecondaryLogicalName != null
                                    && !string.Equals(line.SecondaryLogicalName, line.LogicalName, StringComparison.OrdinalIgnoreCase);
@@ -1414,6 +1605,7 @@ namespace MyscotekDataCompare.UI
                 }
                 _detailGrid.Rows.AddRange(lines.ToArray());
                 _detailGrid.ClearSelection();
+                _detailCountLabel.Text = Number(lines.Count) + " of " + Plural(_detailLines.Count, "column");
             }
             finally
             {
@@ -1484,7 +1676,8 @@ namespace MyscotekDataCompare.UI
             _result = updated;
             _rowsById = rowsById;
 
-            // Only the status texts change: update them in place (the order and the other cells stay).
+            // Only the status texts and the differing attributes change: update them in place (the order and the
+            // other cells stay).
             _bindingSource.RaiseListChangedEvents = false;
             _table.BeginLoadData();
             try
@@ -1494,6 +1687,8 @@ namespace MyscotekDataCompare.UI
                     if (!(tableRow[IdColumn] is Guid id) || !rowsById.TryGetValue(id, out RowComparison row)) continue;
                     string status = StatusText(row.Status);
                     if (!string.Equals(tableRow[StatusColumn] as string, status, StringComparison.Ordinal)) tableRow[StatusColumn] = status;
+                    string differing = DifferingText(row);
+                    if (!string.Equals(tableRow[DifferingColumn] as string, differing, StringComparison.Ordinal)) tableRow[DifferingColumn] = differing;
                 }
             }
             finally
@@ -1504,8 +1699,10 @@ namespace MyscotekDataCompare.UI
             }
 
             UpdateSummary();
-            UpdateRowCountLabel();
-            ShowSelectedDetails();
+            // The differing columns follow the new decisions (a column that no longer differs anywhere drops out and
+            // its filter falls back to "(any column)"), and every filter is applied again to the changed cells.
+            FillDifferingColumnFilter();
+            ApplyRowFilter(force: true);   // also the row count and the detail pane
             _grid.Invalidate();
             WriteRunLine(LogLevel.Info, "Re-evaluated with the new compare options (nothing read again) - Result: " + ResultCounts(updated.Summary) + ".");
             if (!IsBusy) SetProgress(FinalProgressText(updated.Summary));

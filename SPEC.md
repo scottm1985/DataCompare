@@ -15,7 +15,8 @@ The tool is published as **Data Compare** by **Myscotek**: XrmToolBox Tool Libra
 
 Status: phase 1 (scaffold, Core engine, tests) and phase 2 (the UI of sections 6 and 7) done - version 1.2026.10.1,
 not released. Phase 3 (2026-10-04, version 1.2026.10.2): entity and column mappings (5.9, 6.6) and the prefix
-filter (5.5, 6.5). Where phase 2 had to settle what this document left open, see 6.4; phase 3, 6.7.
+filter (5.5, 6.5). Where phase 2 had to settle what this document left open, see 6.4; phase 3, 6.7. Still in
+1.2026.10.2: the detail pane's column search (6.8) and the results grid's differing-column filter (6.9).
 
 ## 1. Decisions taken by the owner — do not change
 
@@ -507,7 +508,8 @@ re-specified here: `UiLogger`, settings load/save seams, `ExecuteMethod`-based c
        (`CompareProgress.Message`, AutoEllipsis). A **summary strip**: `Primary: N  Secondary: N  |  Missing: a
        Different: b  Extra: c  Matching: d` (each count on the row colour of its status; `Not checked: e` when
        cancelled; `Secondary view failed` in red with the error as tooltip when `SecondaryQueryFailed`). A filter row:
-       `Status:` `ComboBox` (DropDownList: `All`, `Missing`, `Different`, `Extra`, `Matching`) and a `TextBox`
+       `Status:` `ComboBox` (DropDownList: `All`, `Missing`, `Different`, `Extra`, `Matching`), `Differing column:`
+       `ComboBox` (`differingColumnFilter`, DropDownList, 6.9) and a `TextBox`
        `Filter rows...` (client-side, over every visible cell). The **results grid** (`DataGridView`, ReadOnly,
        AllowUserToAddRows = false, RowHeadersVisible = false, SelectionMode FullRowSelect, MultiSelect = false,
        AutoSizeColumnsMode None): first column `Status` (text: Missing / Different / Extra / Matching), then the VIEW's
@@ -521,7 +523,8 @@ re-specified here: `UiLogger`, settings load/save seams, `ExecuteMethod`-based c
      * **Bottom**: a second horizontal `SplitContainer`: the **detail pane** above the **log**.
        * Detail pane: a header label (`{DisplayName} {id} - {status}`, plus `found by id outside the secondary's
          view` / `... the primary's view` when `InSecondaryView` / `InPrimaryView` is false), a `CheckBox`
-         `Differences only` (persisted; shows the lines with `IsDifferent`), and a `DataGridView` (ReadOnly) with
+         `Differences only` (persisted; shows the lines with `IsDifferent`), a column search row (6.8: `TextBox`
+         `detailFilterBox`, cue `Search columns (name or display name)`, and `X of Y columns`), and a `DataGridView` (ReadOnly) with
          columns `Column` (DisplayName, tooltip = logical name + Note), `Primary`, `Secondary` from
          `CompareResult.GetDetails(row)`. Line colours: `IsMismatch` → AMBER `#FFF3CD`; `!IsCompared` → grey text
          (`SystemColors.GrayText`) on the window background (ignored, derived, primary key, not in metadata);
@@ -568,7 +571,7 @@ re-specified here: `UiLogger`, settings load/save seams, `ExecuteMethod`-based c
 * The detail caption puts the found-by-id note in parentheses: `Account {id} - Different (found by id outside the
   secondary's view)`. Its selected line is neutral grey (`#E2E3E5`); amber lines select darker amber.
 * Re-evaluating after the ignored list changes updates the status cells in place (the DataTable's order is the
-  result's), the summary, the filters and the detail pane, and logs `Re-evaluated with the new compare options
+  result's), the summary, the differing-column filter's list (6.9), the filters and the detail pane, and logs `Re-evaluated with the new compare options
   (nothing read again) - Result: ...` (phase 3 wording; it was "ignored attributes").
 * Kept from Data Copier: a `====` line before the run header, a same-organisation heads-up log line when the
   secondary is chosen, Refresh entities also forgets the primary metadata cache.
@@ -613,6 +616,48 @@ re-specified here: `UiLogger`, settings load/save seams, `ExecuteMethod`-based c
   own (an 800 px tool); the buttons wrap only below any real tab width (640 x 400). Sized by `FitActionRow` in `FitLayout`.
 * Log texts use `->` for mappings (ASCII); the UI labels use `→`.
 * A mapping to a table of the same organisation skips the same-organisation question (it is a real comparison).
+
+### 6.8 Column search in the detail pane (owner request 2026-10-04)
+* A free-text `TextBox` (`detailFilterBox`, cue `Search columns (name or display name)`) on a row of its own
+  (`detailFilterRow`) between the caption row (caption | `Differences only`) and the detail grid, with `detailCountLabel`
+  at its right: `X of Y columns` (lines shown / lines of the selected row; `0 of 0 columns` without a row). Not on the
+  caption's row: at 800 px the caption (entity, GUID, status, found-by-id note) would be cut short.
+* A line is shown when the trimmed text is blank or a case-insensitive substring of `ColumnComparison.LogicalName` OR
+  `DisplayName` (`MatchesColumnSearch`) AND, with `Differences only`, it `IsDifferent`. The primary key line obeys the
+  search like any other. Applied as the user types (TextChanged): the selected row's lines are kept
+  (`_detailLines`) and only filtered again, nothing is recomputed.
+* The text stays when another row is selected (and when the result changes), so one column can be followed from row to
+  row; only the user clears it - Escape in the box clears it (taken as the box's own key while there is text).
+  Not persisted in the settings.
+* `DetailPanelMinHeight` went from 90 to 120 px so the grid keeps a few lines under the two header rows.
+
+### 6.9 Differing-column filter (owner request 2026-10-05)
+* "Filter by all rows with a specific column that is different": a `ComboBox` (`differingColumnFilter`, DropDownList,
+  220 px, its list as wide as its longest item) after the status filter, labelled `Differing column:`
+  (`differingColumnLabel`). First item `(any column)` = no filter (`AnyColumn`); then one item per attribute of the
+  UNION of the rows' `DifferingAttributes` (`DifferingColumnChoices`): `Display Name (logicalname) · N` - N = the rows
+  where it differs, the display name from the result's (primary) metadata, just `logicalname · N` when it has no
+  label (as `NameChoice`) - sorted by display name (current culture, ignoring case), then logical name. Names are
+  the PRIMARY logical names, also for a mapped entity (5.9).
+* Filled when a result is shown (`ShowResult`, before binding) and after every re-evaluation (6.4): the attribute
+  selected stays selected while it is still listed, else the filter falls back to `(any column)`. Only `(any
+  column)` while no result is shown - also from the moment a new Compare starts (`ClearResult`) and after another
+  view or entity is chosen. Not saved in the settings.
+* Filtering: a hidden DataTable column `__differing` (`DifferingColumn`, never a grid column, never searched by the
+  text filter) holds `|name1|name2|`; choosing an attribute adds `[__differing] LIKE '%|name|%'` to the
+  BindingSource filter, AND-ed with the status and text filters (a row must pass all three); `X of Y rows` as usual.
+  Only Different rows can pass: Missing and Extra rows have no column comparison (empty `DifferingAttributes`) and
+  drop out while an attribute is chosen, and so do Matching rows. Re-evaluation rewrites `__differing` in place with
+  `__status` and applies the filters again (`ApplyRowFilter(force)`: the filter text may be unchanged while the cells
+  changed). Measured on 20 000 rows: choosing an item about 0.1 s.
+* The detail pane is left alone: choosing a column does not touch the column search (6.8) or Differences only.
+* Layout (`FitFilterRow`, in `FitLayout`): the filter row is a wrapping flow (`filterRow`: `Status:` | status combo |
+  `Differing column:` | its combo | `Filter rows...` | `X of Y rows`) whose text box takes the rest of the line while
+  that leaves it `FilterBoxMinWidth` (160 px); else the two combos keep the first line and the text box (as wide as the
+  line allows) and the count take the next (an 800 px tool); on a tool too narrow for both combos (640 x 400) each
+  label stays with its combo (flow breaks) on a line of its own. `X of Y rows` always ends its line. At 800 x 500 with a
+  two-line summary strip the results area therefore scrolls by (at most) the filter row's second line; 800 x 600
+  does not scroll.
 
 ## 7. Settings (`UI\DataCompareSettings`, XmlSerializer via SettingsManager, file `MyscotekDataCompare.xml`)
 
@@ -693,3 +738,21 @@ NU5048 expected). Release: bump `1.YYYY.M.N` in `AssemblyInfo.cs` (three attribu
   the prefix filter round trip with re-evaluation, settings round trip and old files, captions and name parsing); the
   layout at 800 x 600 / 1920 x 1080 / 640 x 400 with the new buttons and labels, and the three dialogs at their default
   and minimum sizes.
+* **Column search added** (6.8; 2 tests, 320 in all): `UiFlowTests` - by a part of the logical name only and of the
+  display name only, case-insensitive, the key line filtered too, `X of Y columns`, combined with Differences only, kept
+  across row selection (and an empty pane without a row), Escape clears (input key while there is text), blank and white
+  space restore every line, never saved; `MatchesColumnSearch` unit-level. The layout tests check the search row (stacked
+  between the caption row and the grid, nothing clipped or overlapping, box at least 100 px, count at the right) at
+  800 x 500, 1600 x 900, 800 x 600, 1920 x 1080 and 640 x 400.
+* **Differing-column filter added** (6.9; 3 tests, 323 in all): `UiFlowTests` - `(any column)` alone and selected
+  without a result; after Compare the differing attributes with their counts, by display name (logical name alone
+  without a label); a column keeps only its rows, Missing/Extra drop out, combined with the status and the text
+  filters (the hidden names are not searched), `X of Y rows`, the detail pane's column search untouched; after a
+  re-evaluation an attribute that stops differing leaves the list and the filter falls back, one still differing stays
+  selected and is filtered again, a newly differing one joins; cleared while a new Compare runs and by another view;
+  `DifferingColumnChoices` / `DifferingText` / `DifferingColumnFilter` unit-level (union, counts, order, label
+  fallback, whole names). `UiPerformanceTests` - the list filled from 20 000 rows, choosing a column, with the status
+  filter, back to `(any column)` (each under 2 s; measured about 0.1 s), the list after re-evaluation. `UiLayoutTests`
+  - each label on its combo's line, the text box on the count's line and the count ending it, at every size; one line
+  at 1600 x 900 and 1920 x 1080, two at 800 x 600 (combos, then the text box), three at 640 x 400; a chosen column at
+  640 x 400 and 1600 x 900; 800 x 500 now scrolls by at most the filter row's second line.
