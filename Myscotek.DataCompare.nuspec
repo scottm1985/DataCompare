@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://schemas.microsoft.com/packaging/2013/05/nuspec.xsd">
+  <metadata>
+    <!-- The XrmToolBox Tool Library package. <version> must equal the assembly version in
+         src\MyscotekDataCompare\Properties\AssemblyInfo.cs, or the Tool Library offers an update
+         forever: build-package.ps1 refuses to pack when they differ. -->
+    <id>Myscotek.DataCompare</id>
+    <version>1.2026.10.2</version>
+    <title>Data Compare</title>
+    <authors>Myscotek</authors>
+    <owners>Myscotek</owners>
+    <requireLicenseAcceptance>false</requireLicenseAcceptance>
+    <license type="expression">MIT</license>
+    <projectUrl>https://github.com/scottm1985/DataCompare</projectUrl>
+    <!-- iconUrl ONLY: with a packed <icon>, nuget.org reports its own extensionless icon endpoint and the
+         XrmToolBox portal then fails validation with "Logo Url is not valid". NuGet warns NU5048; ignore it. -->
+    <iconUrl>https://raw.githubusercontent.com/scottm1985/DataCompare/main/images/icon-128.png</iconUrl>
+    <repository type="git" url="https://github.com/scottm1985/DataCompare" />
+    <summary>Compares the records of a view between two Dataverse / Dynamics 365 environments after a migration: missing, extra and different records, column by column.</summary>
+    <description>
+      XrmToolBox tool. Connect to the environment the data came from (primary) and the one it was migrated to
+      (secondary), pick an entity and one of its views, and Data Compare reads every record of the view in both
+      environments, matches them on their GUID and shows each one coloured: missing from the secondary (red),
+      present in both but with at least one different column (amber), identical (green), or only in the
+      secondary (blue). Every attribute of the entity is compared, except an editable list of ignored audit, owner
+      and currency columns; selecting a record shows each column side by side with the differences highlighted.
+      Dataverse online and Dynamics 365 on-premises 9.x. Read-only: nothing is ever written to either environment.
+    </description>
+    <releaseNotes>
+      1.2026.10.2 - Entity mappings: compare an entity with a differently named table in the secondary (data
+      migrated into another table), with optional column pairs for columns that were renamed; the view is
+      rewritten for the secondary table, and the records are still matched on their GUID. Compare options...
+      replaces Ignored attributes... and adds a prefix filter: compare only the columns whose names start with
+      given prefixes (e.g. contoso_, new_).
+      1.2026.10.1 - first release.
+    </releaseNotes>
+    <copyright>Copyright (c) 2026 Myscotek</copyright>
+    <!-- The "XrmToolBox" tag is what the Tool Library looks for. -->
+    <tags>XrmToolBox Plugins Dataverse Dynamics365 Data Compare Comparison Migration Reconciliation Myscotek</tags>
+    <dependencies>
+      <dependency id="XrmToolBox" version="1.2025.10.74" />
+    </dependencies>
+  </metadata>
+  <files>
+    <!-- XrmToolBox installs lib\net48\Plugins\* into its Plugins folder. Only the tool's own assembly
+         ships: XrmToolBox provides the XrmToolBox, McTools, Dataverse SDK and Newtonsoft assemblies. -->
+    <file src="src\MyscotekDataCompare\bin\Release\MyscotekDataCompare.dll" target="lib\net48\Plugins" />
+  </files>
+</package>
